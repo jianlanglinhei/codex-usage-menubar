@@ -1,0 +1,9 @@
+.DS_Store
+/build/
+*.app/
+*.dSYM/
+*.log
+.env
+.env.*
+status.txt
+reset-forecast.json

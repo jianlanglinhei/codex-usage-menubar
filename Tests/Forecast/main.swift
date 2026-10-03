@@ -1,0 +1,20 @@
+import Foundation
+let html = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
+let testNow = ResetForecast.date("2026-10-03T17:00:00Z")!
+let snapshot = try ResetForecast.parse(html, now: testNow)
+precondition(snapshot.probability24h == 26 && snapshot.probability48h == 46)
+precondition(snapshot.forecastAt != snapshot.sourceCheckedAt)
+precondition(snapshot.originalPostURL == "https://x.com/thsottiaux/status/2106131810921136451")
+print("PASS synthetic page: 26% / 46%; forecast time separate from source check")
+precondition(!snapshot.isFresh(at: snapshot.baseDate.addingTimeInterval(6 * 3600 + 1)))
+print("PASS expired forecast stays expired despite a fresh monitor check")
+func rejects(_ text: String) -> Bool { do { _ = try ResetForecast.parse(text, now: testNow); return false } catch { return true } }
+precondition(rejects(html.replacingOccurrences(of: "data-target-value=\"26\"", with: "data-target-value=\"126\"")))
+precondition(rejects(html.replacingOccurrences(of: "probability-ring-24h", with: "changed-24h")))
+precondition(rejects("<html>security policy denied</html>"))
+precondition(rejects(html.replacingOccurrences(of: "forecastStatus:\"current\"", with: "forecastStatus:\"stale\"")))
+print("PASS out-of-range, changed structure, block page and unavailable forecast rejected")
+let reordered = html.replacingOccurrences(of: "data-testid=\"probability-ring-24h\"", with: "data-testid='probability-ring-24h'")
+let reorderedSnapshot = try ResetForecast.parse(reordered, now: testNow)
+precondition(reorderedSnapshot.probability24h == 26)
+print("PASS attribute quotes tolerated; animated 0% ignored")
