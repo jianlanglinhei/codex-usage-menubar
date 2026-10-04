@@ -1,233 +1,190 @@
 import AppKit
-import Foundation
-import Darwin
+import Combine
+import SwiftUI
 
-struct Window: Decodable {
-    let usedPercent: Double
-    let windowDurationMins: Int?
-    let resetsAt: Double?
-    var remaining: Int { Int(max(0, min(100, 100 - usedPercent)).rounded(.down)) }
-    var label: String {
-        guard let mins = windowDurationMins else { return "额度" }
-        if mins == 10080 { return "每周额度" }
-        if mins % 1440 == 0 { return "\(mins / 1440) 天额度" }
-        if mins % 60 == 0 { return "\(mins / 60) 小时额度" }
-        return "\(mins) 分钟额度"
-    }
-}
-struct Bucket: Decodable {
-    let primary: Window?
-    let secondary: Window?
-    var windows: [Window] { [primary, secondary].compactMap { $0 } }
-}
-struct Limits: Decodable {
-    let rateLimits: Bucket?
-    let rateLimitsByLimitId: [String: Bucket]?
-    var codex: Bucket? { rateLimitsByLimitId?["codex"] ?? rateLimits }
-}
-enum FetchError: Error { case message(String) }
-
-// Use the official local RPC so credentials remain managed by Codex.
-func fetchLimits() throws -> Limits {
-    let process = Process()
-    let userHome = FileManager.default.homeDirectoryForCurrentUser
-    let candidates = [userHome.appendingPathComponent(".local/bin/codex").path, "/opt/homebrew/bin/codex", "/usr/local/bin/codex"]
-    guard let executable = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-        throw FetchError.message("未找到 Codex CLI，请先安装并登录")
-    }
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = ["app-server", "--listen", "stdio://"]
-    process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-    var environment = ProcessInfo.processInfo.environment
-    environment["PATH"] = "\(userHome.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-    process.environment = environment
-    let input = Pipe(), output = Pipe()
-    process.standardInput = input
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    try process.run()
-    defer {
-        try? input.fileHandleForWriting.close()
-        if process.isRunning { process.terminate() }
-        let deadline = Date().addingTimeInterval(1)
-        while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
-        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-        process.waitUntilExit()
-    }
-    func send(_ object: [String: Any]) throws {
-        var data = try JSONSerialization.data(withJSONObject: object)
-        data.append(10)
-        try input.fileHandleForWriting.write(contentsOf: data)
-    }
-    try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "codex_usage_bar", "version": "1.0"]]])
-    var buffer = Data()
-    let deadline = Date().addingTimeInterval(25)
-    let fd = output.fileHandleForReading.fileDescriptor
-    while Date() < deadline {
-        var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        guard poll(&descriptor, 1, 500) > 0 else { continue }
-        let chunk = output.fileHandleForReading.availableData
-        guard !chunk.isEmpty else { throw FetchError.message("Codex 连接已关闭") }
-        buffer.append(chunk)
-        while let newline = buffer.firstIndex(of: 10) {
-            let line = buffer.subdata(in: 0..<newline)
-            buffer.removeSubrange(0...newline)
-            guard let message = try JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
-            if let id = message["id"] as? Int, [1, 2].contains(id), let error = message["error"] as? [String: Any] {
-                throw FetchError.message(error["message"] as? String ?? "无法读取额度")
+func batteryImage(remaining: Int?, stale: Bool) -> NSImage {
+    let image = NSImage(size: NSSize(width: 27, height: 14), flipped: false) { _ in
+        let frame = NSColor.gray.withAlphaComponent(stale ? 0.55 : 1)
+        let outline = NSBezierPath(roundedRect: NSRect(x: 0.75, y: 1.25, width: 23, height: 11.5), xRadius: 3, yRadius: 3)
+        frame.setStroke()
+        outline.lineWidth = 1.5
+        outline.stroke()
+        frame.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 25, y: 5, width: 2, height: 4), xRadius: 1, yRadius: 1).fill()
+        if let remaining, remaining > 0 {
+            let width = max(1, 19 * CGFloat(remaining) / 100)
+            let fill: NSColor
+            switch QuotaLevel(remaining: remaining) {
+            case .healthy: fill = .systemGreen
+            case .low: fill = .systemOrange
+            case .critical: fill = .systemRed
             }
-            if message["id"] as? Int == 1 {
-                try send(["method": "initialized", "params": [:]])
-                try send(["id": 2, "method": "account/rateLimits/read", "params": [:]])
-            } else if message["id"] as? Int == 2, let result = message["result"] {
-                return try JSONDecoder().decode(Limits.self, from: JSONSerialization.data(withJSONObject: result))
-            }
+            fill.withAlphaComponent(stale ? 0.5 : 1).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 2.75, y: 3.25, width: width, height: 7.5), xRadius: min(1.5, width / 2), yRadius: 1.5).fill()
         }
+        return true
     }
-    throw FetchError.message("读取超时，请检查网络或 Codex 登录状态")
+    image.isTemplate = false
+    image.accessibilityDescription = tr("Codex 剩余额度", "Codex usage remaining")
+    return image
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
-    var item: NSStatusItem!
-    var timer: Timer?
-    let sleepKeeper = SleepKeeper()
-    let resetForecast = ResetForecastMenu()
-    var fetching = false
-    var lastUpdate: Date?
-    var limits: Limits?
-    var error: String?
-    let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "zh_CN")
-        f.timeZone = .autoupdatingCurrent
-        f.dateFormat = "MM月dd日 HH:mm"
-        return f
-    }()
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+    private var item: NSStatusItem!
+    private let model = UsageModel()
+    private let popover = NSPopover()
+    private var timer: Timer?
+    private var observation: AnyCancellable?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        try? FileManager.default.createDirectory(at: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CodexUsage"), withIntermediateDirectories: true)
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.autosaveName = "CodexUsage"
         item.isVisible = true
         if let button = item.button {
             button.imagePosition = .imageLeading
             button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+            button.target = self
+            button.action = #selector(clicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        sleepKeeper.onChange = { [weak self] in self?.render() }
-        resetForecast.onChange = { [weak self] in self?.render() }
+        let host = NSHostingController(rootView: UsagePanel(model: model, quit: { [weak self] in self?.quit() }))
+        host.sizingOptions = .preferredContentSize
+        popover.contentViewController = host
+        popover.behavior = .transient
+        popover.animates = true
+        popover.delegate = self
+        model.dismissPanel = { [weak self] in self?.popover.performClose(nil) }
+        observation = model.objectWillChange.receive(on: RunLoop.main).sink { [weak self] _ in self?.render() }
         render()
-        refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.refresh() }
+        model.refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: UsageModel.refreshInterval, repeats: true) { [weak self] _ in self?.model.refresh() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refresh), name: NSWorkspace.didWakeNotification, object: nil)
     }
-    func line(_ text: String, menu: NSMenu) {
-        let row = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-        row.isEnabled = false
-        menu.addItem(row)
-    }
-    func action(_ title: String, _ selector: Selector, menu: NSMenu) {
-        let row = NSMenuItem(title: title, action: selector, keyEquivalent: "")
-        row.target = self
-        menu.addItem(row)
-    }
-    func batteryImage(remaining: Int?) -> NSImage {
-        let image = NSImage(size: NSSize(width: 27, height: 14), flipped: false) { _ in
-            let outline = NSBezierPath(roundedRect: NSRect(x: 0.75, y: 1.25, width: 23, height: 11.5), xRadius: 3, yRadius: 3)
-            NSColor.gray.setStroke()
-            outline.lineWidth = 1.5
-            outline.stroke()
-            NSColor.gray.setFill()
-            NSBezierPath(roundedRect: NSRect(x: 25, y: 5, width: 2, height: 4), xRadius: 1, yRadius: 1).fill()
-            if let remaining, remaining > 0 {
-                let width = max(1, 19 * CGFloat(remaining) / 100)
-                (remaining <= 10 ? NSColor.systemRed : (remaining <= 20 ? NSColor.systemYellow : NSColor.systemGreen)).setFill()
-                NSBezierPath(roundedRect: NSRect(x: 2.75, y: 3.25, width: width, height: 7.5), xRadius: min(1.5, width / 2), yRadius: 1.5).fill()
-            }
-            return true
+
+    private func render() {
+        guard let button = item.button else { return }
+        let remaining = model.tightest?.remaining
+        let stale = model.stale
+        let percent = remaining.map { "\($0)%" } ?? "—"
+        switch model.barStyle {
+        case .iconAndPercent:
+            button.image = batteryImage(remaining: remaining, stale: stale)
+            button.title = " " + percent + (stale ? " !" : "")
+        case .percent:
+            button.image = nil
+            button.title = percent + (stale ? " !" : "")
+        case .icon:
+            button.image = batteryImage(remaining: remaining, stale: stale)
+            button.title = stale ? " !" : ""
         }
-        image.isTemplate = false
-        image.accessibilityDescription = "Codex 剩余额度"
-        return image
+        var tip = tr("Codex 剩余额度 ", "Codex usage remaining: ") + percent
+        if let window = model.tightest, let reset = window.resetDate { tip += tr("（\(window.label)，\(resetText(reset))）", " (\(window.label), \(resetText(reset).lowercased()))") }
+        if stale { tip += tr("\n尚未更新或数据已过期", "\nNot updated yet or out of date") }
+        button.toolTip = tip + tr("\n点按查看详情，右键快捷操作", "\nClick for details, right-click for quick actions")
     }
-    func render() {
-        let windows = limits?.codex?.windows ?? []
-        let stale = error != nil || (lastUpdate.map { Date().timeIntervalSince($0) > 600 } ?? true)
-        let remaining = windows.map(\.remaining).min()
-        item.button?.image = batteryImage(remaining: remaining)
-        item.button?.title = remaining.map { " \($0)%\(stale ? " !" : "")" } ?? " —"
-        item.button?.toolTip = "Codex 剩余额度" + (stale ? "（尚未更新或数据已过期）" : "")
+
+    @objc private func clicked() {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true { showQuickMenu() }
+        else { togglePopover() }
+    }
+
+    private func togglePopover() {
+        guard let button = item.button else { return }
+        if popover.isShown { popover.performClose(nil); return }
+        model.refreshIfStale()
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    private func showQuickMenu() {
+        guard let button = item.button else { return }
+        if popover.isShown { popover.performClose(nil) }
         let menu = NSMenu()
-        line("Codex 剩余额度", menu: menu)
+        menu.autoenablesItems = false
+        let summary = NSMenuItem(title: model.tightest.map { tr("剩余 \($0.remaining)% · \($0.label)", "\($0.remaining)% left · \($0.label)") } ?? tr("暂无额度数据", "No usage data"), action: nil, keyEquivalent: "")
+        summary.isEnabled = false
+        menu.addItem(summary)
         menu.addItem(.separator())
-        if windows.isEmpty { line("暂无额度数据", menu: menu) }
-        for window in windows {
-            line("\(window.label)：剩余 \(window.remaining)%", menu: menu)
-            if let reset = window.resetsAt {
-                line("重置：\(dateFormatter.string(from: Date(timeIntervalSince1970: reset)))（本机时区）", menu: menu)
-            }
-        }
-        if let reserve = limits?.rateLimitsByLimitId?["base_model_inference"]?.primary {
-            line("备用模型额度：剩余 \(reserve.remaining)%", menu: menu)
-        }
+        let open = NSMenuItem(title: tr("打开面板", "Open Panel"), action: #selector(openPanel), keyEquivalent: "")
+        let refresh = NSMenuItem(title: model.fetching ? tr("正在刷新…", "Refreshing…") : tr("立即刷新", "Refresh Now"), action: #selector(refresh), keyEquivalent: "r")
+        refresh.isEnabled = !model.fetching
+        let quit = NSMenuItem(title: tr("退出", "Quit"), action: #selector(quit), keyEquivalent: "q")
+        for row in [open, refresh] { row.target = self; menu.addItem(row) }
         menu.addItem(.separator())
-        if let lastUpdate { line("更新：\(dateFormatter.string(from: lastUpdate))（本机时区）", menu: menu) }
-        line("每 5 分钟自动刷新", menu: menu)
-        if let error { line(String(error.prefix(100)), menu: menu) }
-        action(fetching ? "正在刷新…" : "立即刷新", #selector(refresh), menu: menu)
-        menu.addItem(.separator())
-        let forecastItem = NSMenuItem(title: "Tibo 重置预测", action: nil, keyEquivalent: "")
-        forecastItem.submenu = resetForecast.makeMenu()
-        menu.addItem(forecastItem)
-        let settingsMenu = NSMenu(title: "设置")
-        settingsMenu.autoenablesItems = false
-        line(sleepKeeper.status, menu: settingsMenu)
-        line(sleepKeeper.thermalStatus, menu: settingsMenu)
-        line("过热保护：合盖模式下，高温即请求休眠", menu: settingsMenu)
-        if let message = sleepKeeper.message { line(message, menu: settingsMenu) }
-        let sleepAction = NSMenuItem(title: sleepKeeper.active ? "关闭并恢复正常睡眠" : "开启合盖继续工作（2 小时）", action: #selector(toggleSleep), keyEquivalent: "")
-        sleepAction.target = self
-        sleepAction.isEnabled = !sleepKeeper.busy
-        settingsMenu.addItem(sleepAction)
-        line("电池 ≤20%、到时或退出后自动恢复", menu: settingsMenu)
-        line("开启需要管理员授权；请放在通风处", menu: settingsMenu)
-        let settingsItem = NSMenuItem(title: "设置", action: nil, keyEquivalent: "")
-        settingsItem.submenu = settingsMenu
-        menu.addItem(settingsItem)
-        menu.addItem(.separator())
-        action("退出", #selector(quit), menu: menu)
-        item.menu = menu
-        let diagnostic = "\(resetForecast.diagnostic) menu=\(menu.items.map(\.title)) thermal=\(sleepKeeper.thermalStatus) sleep=\(sleepKeeper.status) icon=battery title=\(item.button?.title ?? "nil") visible=\(item.isVisible) frame=\(String(describing: item.button?.window?.frame)) screens=\(NSScreen.screens.map { NSStringFromRect($0.frame) }) updated=\(String(describing: lastUpdate)) error=\(error ?? "none")\n"
-        try? diagnostic.write(to: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CodexUsage/status.txt"), atomically: true, encoding: .utf8)
+        quit.target = self
+        menu.addItem(quit)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
     }
-    @objc func refresh() {
-        resetForecast.refresh()
-        guard !fetching else { return }
-        fetching = true
-        render()
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Result { try fetchLimits() }
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.fetching = false
-                switch result {
-                case .success(let data):
-                    self.limits = data
-                    self.lastUpdate = Date()
-                    self.error = data.codex?.windows.isEmpty == false ? nil : "账户未返回 Codex 额度"
-                case .failure(let error):
-                    if case FetchError.message(let message) = error { self.error = message }
-                    else { self.error = "读取失败：\(error.localizedDescription)" }
-                }
-                self.render()
-            }
-        }
-    }
-    @objc func toggleSleep() {
-        if sleepKeeper.active { sleepKeeper.stop() } else { sleepKeeper.start() }
-    }
-    func applicationWillTerminate(_ notification: Notification) { sleepKeeper.releaseLease() }
-    @objc func quit() {
-        sleepKeeper.releaseLease()
+
+    func popoverDidShow(_ notification: Notification) { item.button?.highlight(true) }
+    func popoverDidClose(_ notification: Notification) { item.button?.highlight(false) }
+
+    @objc private func openPanel() { if !popover.isShown { togglePopover() } }
+    @objc private func refresh() { model.refresh() }
+    func applicationWillTerminate(_ notification: Notification) { model.releaseLease() }
+    @objc private func quit() {
+        model.releaseLease()
         NSApp.terminate(nil)
+    }
+}
+
+/// Renders the panel with fixture data so layout changes can be reviewed without Codex, the network or pmset.
+enum Snapshots {
+    static func render(to directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = Date()
+        let forecast = ResetForecast(sourceName: "Codex Reset Monitor", sourceURL: "https://codexreset.org/", sourceCheckedAt: now.addingTimeInterval(-900),
+                                     probability24h: 18, probability48h: 34, latestResetAt: now.addingTimeInterval(-5 * 86400),
+                                     originalPostURL: "https://x.com/thsottiaux/status/1", forecastAt: now.addingTimeInterval(-1200),
+                                     fetchedAt: now.addingTimeInterval(-60), sourceDegraded: false)
+        func limits(_ weekly: Double, _ short: Double, reserve: Double?) throws -> Limits {
+            var buckets: [String: Any] = ["codex": ["primary": ["usedPercent": short, "windowDurationMins": 300, "resetsAt": now.addingTimeInterval(2 * 3600 + 1500).timeIntervalSince1970],
+                                                    "secondary": ["usedPercent": weekly, "windowDurationMins": 10080, "resetsAt": now.addingTimeInterval(3 * 86400 + 4 * 3600).timeIntervalSince1970]]]
+            if let reserve { buckets["base_model_inference"] = ["primary": ["usedPercent": reserve, "windowDurationMins": 10080]] }
+            return try JSONDecoder().decode(Limits.self, from: JSONSerialization.data(withJSONObject: ["rateLimitsByLimitId": buckets]))
+        }
+        let off = SleepDisplay(active: false, busy: false, status: "", message: nil, deadline: nil)
+        let on = SleepDisplay(active: true, busy: false, status: "", message: nil, deadline: now.addingTimeInterval(97 * 60))
+        let cases: [(String, NSAppearance.Name, UsageModel)] = [
+            ("panel-light", .aqua, UsageModel(preview: try limits(38, 12, reserve: 0), error: nil, updated: now.addingTimeInterval(-120), forecast: ResetForecastSource(snapshot: forecast), sleep: off)),
+            ("panel-dark", .darkAqua, UsageModel(preview: try limits(38, 12, reserve: 0), error: nil, updated: now.addingTimeInterval(-120), forecast: ResetForecastSource(snapshot: forecast), sleep: on)),
+            ("panel-low-error", .aqua, UsageModel(preview: try limits(86, 93, reserve: nil), error: tr("读取超时，请检查网络或 Codex 登录状态", "Timed out. Check your network or Codex sign-in."), updated: now.addingTimeInterval(-1500),
+                                                  forecast: ResetForecastSource(snapshot: nil, error: tr("公司网络策略拦截了来源域名", "Your network policy blocks the source site")), sleep: off)),
+            ("panel-loading", .aqua, UsageModel(preview: nil, error: nil, updated: nil, forecast: ResetForecastSource(snapshot: nil), sleep: off, fetching: true)),
+        ]
+        let icons = HStack(spacing: 18) {
+            ForEach([(76, false), (16, false), (7, false), (62, true)], id: \.0) { remaining, stale in
+                HStack(spacing: 3) {
+                    Image(nsImage: batteryImage(remaining: remaining, stale: stale))
+                    Text("\(remaining)%\(stale ? " !" : "")").font(.system(size: 12, weight: .medium).monospacedDigit())
+                }
+            }
+        }.padding(10)
+        try write(icons, appearance: .aqua, to: directory.appendingPathComponent("menubar.png"))
+        for (name, appearance, model) in cases {
+            try write(UsagePanel(model: model), appearance: appearance, to: directory.appendingPathComponent(name + ".png"))
+            print(directory.appendingPathComponent(name + ".png").path)
+        }
+    }
+
+    private static func write<V: View>(_ view: V, appearance: NSAppearance.Name, to url: URL) throws {
+        let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)))
+        host.appearance = NSAppearance(named: appearance)
+        let size = host.fittingSize
+        let frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.appearance = host.appearance
+        window.contentView = host
+        host.frame = frame
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        host.layoutSubtreeIfNeeded()
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { throw FetchError.message("no bitmap") }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { throw FetchError.message("no png") }
+        try data.write(to: url)
     }
 }
 
@@ -237,6 +194,14 @@ if CommandLine.arguments.contains("--check") {
         guard let windows = data.codex?.windows, !windows.isEmpty else { throw FetchError.message("No quota windows") }
         for window in windows { print("\(window.label): remaining=\(window.remaining)%") }
     } catch { fputs("\(error)\n", stderr); exit(1) }
+} else if let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
+    if let flag = CommandLine.arguments.firstIndex(of: "--lang"), flag + 1 < CommandLine.arguments.count {
+        Language.current = CommandLine.arguments[flag + 1].hasPrefix("zh") ? .chinese : .english
+    }
+    let app = NSApplication.shared
+    app.setActivationPolicy(.prohibited)
+    do { try Snapshots.render(to: URL(fileURLWithPath: CommandLine.arguments[index + 1])) }
+    catch { fputs("\(error)\n", stderr); exit(1) }
 } else {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)

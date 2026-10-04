@@ -40,7 +40,7 @@ struct ResetForecast: Codable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { d in
             let text = try d.singleValueContainer().decode(String.self)
-            guard let date = Self.date(text) else { throw ForecastError(message: "缓存时间无效") }
+            guard let date = Self.date(text) else { throw ForecastError(message: tr("缓存时间无效", "Cached time is invalid")) }
             return date
         }
         guard let data = try? Data(contentsOf: cacheURL), let snapshot = try? decoder.decode(Self.self, from: data), snapshot.isValid else { return nil }
@@ -81,12 +81,12 @@ struct ResetForecast: Codable {
               let resetTag = tag("reset-exact-time"), let resetText = attribute("datetime", in: resetTag), let reset = date(resetText),
               let freshnessIndex = tags.firstIndex(where: { attribute("data-testid", in: $0) == "monitor-freshness" }),
               let checkedText = tags.dropFirst(freshnessIndex + 1).prefix(40).compactMap({ attribute("datetime", in: $0) }).first,
-              let checked = date(checkedText) else { throw ForecastError(message: "来源页面结构已变化，暂不展示新预测") }
+              let checked = date(checkedText) else { throw ForecastError(message: tr("来源页面结构已变化，暂不展示新预测", "The source page changed; new forecasts are hidden for now")) }
         // Keep the forecast's own timestamp separate from the monitor's newer health-check time.
         guard let snapshotHeader = capture(#"(snapshot:\$R\[\d+\]=\{status:"[^"]+",updatedAt:"[^"]+",forecastStatus:"[^"]+")"#, in: html),
               let modelTime = capture(#"updatedAt:"([^"]+)""#, in: snapshotHeader).flatMap(date),
               let forecastStatus = capture(#"forecastStatus:"([^"]+)""#, in: snapshotHeader),
-              forecastStatus == "current" else { throw ForecastError(message: "来源未提供有效的当前预测") }
+              forecastStatus == "current" else { throw ForecastError(message: tr("来源未提供有效的当前预测", "The source has no current forecast")) }
         let post = tags.first { attribute("data-testid", in: $0) == "reset-timeline-item" && attribute("data-kind", in: $0) == "confirmed" && attribute("data-datetime", in: $0).flatMap(date) == reset }
         let forecast = Self(sourceName: "Codex Reset Monitor", sourceURL: "https://codexreset.org/", sourceCheckedAt: checked,
                             probability24h: p24, probability48h: p48, latestResetAt: reset,
@@ -94,17 +94,17 @@ struct ResetForecast: Codable {
                             forecastAt: modelTime, fetchedAt: now,
                             sourceDegraded: capture(#"status:"([^"]+)""#, in: snapshotHeader) == "degraded")
         guard forecast.isValid, checked <= now.addingTimeInterval(300), modelTime <= now.addingTimeInterval(300) else {
-            throw ForecastError(message: "来源概率或时间异常，保留上次有效数据")
+            throw ForecastError(message: tr("来源概率或时间异常，保留上次有效数据", "The source returned odd values; keeping the last valid forecast"))
         }
         return forecast
     }
 }
 
-final class ResetForecastMenu: NSObject {
+final class ResetForecastSource {
     var onChange: (() -> Void)?
-    private var snapshot = ResetForecast.load()
-    private var fetching = false
-    private var error: String?
+    private(set) var snapshot: ResetForecast?
+    private(set) var fetching = false
+    private(set) var error: String?
     private let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 20
@@ -114,18 +114,15 @@ final class ResetForecastMenu: NSObject {
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: config)
     }()
-    private let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "zh_CN")
-        f.timeZone = .autoupdatingCurrent
-        f.dateFormat = "MM月dd日 HH:mm"
-        return f
-    }()
+    init(snapshot: ResetForecast? = ResetForecast.load(), error: String? = nil) {
+        self.snapshot = snapshot
+        self.error = error
+    }
     var diagnostic: String {
         let state = fetching ? "fetching" : (error ?? "ok")
         return "forecast=\(snapshot?.probability24h.description ?? "nil")/\(snapshot?.probability48h.description ?? "nil") fresh=\(snapshot?.isFresh() ?? false) fetched=\(String(describing: snapshot?.fetchedAt)) state=\(state)"
     }
-    @objc func refresh() {
+    func refresh() {
         guard !fetching else { return }
         fetching = true
         onChange?()
@@ -133,14 +130,14 @@ final class ResetForecastMenu: NSObject {
         session.dataTask(with: request) { [weak self] data, response, networkError in
             let result: Result<ResetForecast, Error> = Result {
                 if let networkError { throw networkError }
-                guard let response = response as? HTTPURLResponse else { throw ForecastError(message: "来源没有返回有效响应") }
-                guard response.url?.scheme == "https", response.url?.host == "codexreset.org" else { throw ForecastError(message: "来源跳转异常，已停止更新") }
+                guard let response = response as? HTTPURLResponse else { throw ForecastError(message: tr("来源没有返回有效响应", "The source returned no valid response")) }
+                guard response.url?.scheme == "https", response.url?.host == "codexreset.org" else { throw ForecastError(message: tr("来源跳转异常，已停止更新", "The source redirected unexpectedly; updates stopped")) }
                 guard response.statusCode == 200 else {
                     let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                    let message = response.statusCode == 403 && body.contains("安全策略") ? "公司网络策略拦截了来源域名" : "来源读取失败（HTTP \(response.statusCode)）"
+                    let message = response.statusCode == 403 && body.contains("安全策略") ? tr("公司网络策略拦截了来源域名", "Your network policy blocks the source site") : tr("来源读取失败（HTTP \(response.statusCode)）", "Couldn't load the source (HTTP \(response.statusCode))")
                     throw ForecastError(message: message)
                 }
-                guard let data, data.count <= 5_000_000, let html = String(data: data, encoding: .utf8) else { throw ForecastError(message: "来源页面无效或过大") }
+                guard let data, data.count <= 5_000_000, let html = String(data: data, encoding: .utf8) else { throw ForecastError(message: tr("来源页面无效或过大", "The source page is invalid or too large")) }
                 return try ResetForecast.parse(html)
             }
             DispatchQueue.main.async {
@@ -150,56 +147,17 @@ final class ResetForecastMenu: NSObject {
                 case .success(let value):
                     self.snapshot = value
                     self.error = nil
-                    do { try value.save() } catch { self.error = "读取成功，但本地缓存保存失败" }
+                    do { try value.save() } catch { self.error = tr("读取成功，但本地缓存保存失败", "Loaded, but the local cache couldn't be saved") }
                 case .failure(let failure): self.error = failure.localizedDescription
                 }
                 self.onChange?()
             }
         }.resume()
     }
-    func makeMenu() -> NSMenu {
-        let menu = NSMenu(title: "Tibo 重置预测")
-        menu.autoenablesItems = false
-        func line(_ text: String) {
-            let row = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-            row.isEnabled = false
-            menu.addItem(row)
-        }
-        line("Tibo · @thsottiaux")
-        line("额外统一重置 · 第三方试验性预测")
-        menu.addItem(.separator())
-        if let snapshot {
-            if snapshot.isFresh() {
-                line("预测基准后 24 小时：约 \(snapshot.probability24h)%")
-                line("预测基准后 48 小时：约 \(snapshot.probability48h)%")
-            } else { line("来源预测已过期，暂不显示概率") }
-            line("预测基准：\(formatter.string(from: snapshot.baseDate))（本机时区）")
-            line("来源检查：\(formatter.string(from: snapshot.sourceCheckedAt))（本机时区）")
-            if let fetched = snapshot.fetchedAt { line("本机更新：\(formatter.string(from: fetched))（本机时区）") }
-            line("来源记录的最近重置：\(formatter.string(from: snapshot.latestResetAt))")
-            if snapshot.sourceDegraded == true { line("来源部分监测异常，预测仅供参考") }
-            line("来源：\(snapshot.sourceName) · 非官方")
-        } else { line("暂时没有可用预测数据") }
-        if let error { line("更新失败：\(String(error.prefix(85)))") }
-        line("每 5 分钟自动刷新，过期后隐藏概率")
-        menu.addItem(.separator())
-        let refreshItem = NSMenuItem(title: fetching ? "正在刷新预测…" : "立即刷新预测", action: #selector(refresh), keyEquivalent: "")
-        refreshItem.target = self
-        refreshItem.isEnabled = !fetching
-        menu.addItem(refreshItem)
-        let live = NSMenuItem(title: "查看实时预测与依据…", action: #selector(openLive), keyEquivalent: "")
-        live.target = self
-        menu.addItem(live)
-        let post = NSMenuItem(title: "查看最近重置原帖…", action: #selector(openPost), keyEquivalent: "")
-        post.target = self
-        post.isEnabled = postURL != nil
-        menu.addItem(post)
-        return menu
-    }
-    private var postURL: URL? {
+    var postURL: URL? {
         guard let value = snapshot?.originalPostURL, let url = URL(string: value), url.scheme == "https", url.host == "x.com", url.path.hasPrefix("/thsottiaux/status/") else { return nil }
         return url
     }
-    @objc private func openLive() { NSWorkspace.shared.open(URL(string: "https://codexreset.org/")!) }
-    @objc private func openPost() { if let url = postURL { NSWorkspace.shared.open(url) } }
+    func openLive() { NSWorkspace.shared.open(URL(string: "https://codexreset.org/")!) }
+    func openPost() { if let url = postURL { NSWorkspace.shared.open(url) } }
 }

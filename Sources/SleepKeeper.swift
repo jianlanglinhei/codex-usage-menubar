@@ -9,7 +9,7 @@ final class SleepKeeper {
     private(set) var busy = false
     private(set) var message: String?
     private var marker: URL?
-    private var deadline: Date?
+    private(set) var deadline: Date?
     private var pollTimer: Timer?
     private var expectedOn = false
     private var thermalObserver: NSObjectProtocol?
@@ -21,25 +21,29 @@ final class SleepKeeper {
         @unknown default: return true
         }
     }
-    var thermalStatus: String {
-        switch ProcessInfo.processInfo.thermalState {
-        case .nominal: return "系统热状态：正常"
-        case .fair: return "系统热状态：偏热"
-        case .serious: return "系统热状态：高温"
-        case .critical: return "系统热状态：严重过热"
-        @unknown default: return "系统热状态：未知"
+    static func thermalLevel(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: return tr("正常", "Normal")
+        case .fair: return tr("偏热", "Warm")
+        case .serious: return tr("高温", "Hot")
+        case .critical: return tr("严重过热", "Critical")
+        @unknown default: return tr("未知", "Unknown")
         }
     }
+    static func thermalText(_ state: ProcessInfo.ThermalState) -> String {
+        tr("系统热状态：", "Thermal state: ") + thermalLevel(state)
+    }
+    var thermalStatus: String { Self.thermalText(ProcessInfo.processInfo.thermalState) }
     private func renewLease() {
         guard let marker, expectedOn else { return }
         if Self.shouldSleep(for: ProcessInfo.processInfo.thermalState) {
             overheatTriggered = true
-            message = "过热保护已触发：正在恢复睡眠并请求休眠"
+            message = tr("过热保护已触发：正在恢复睡眠并请求休眠", "Overheat protection triggered: restoring sleep and requesting sleep now")
         }
         // Latch the signal until the watchdog handles it, even if the temperature drops.
         let signal = overheatTriggered ? "overheat" : "normal"
         do { try Data(signal.utf8).write(to: marker, options: .atomic) }
-        catch { message = "保护状态无法更新，防休眠将在租约到期后关闭" }
+        catch { message = tr("保护状态无法更新，防休眠将在租约到期后关闭", "Couldn't update the safety lease; keep-awake will end when it expires") }
     }
 
     static func systemSleepDisabled() -> Bool? {
@@ -51,12 +55,14 @@ final class SleepKeeper {
     var active: Bool { Self.systemSleepDisabled() == true }
     var owned: Bool { marker != nil }
     var status: String {
-        if busy { return "正在更改合盖模式…" }
-        guard let enabled = Self.systemSleepDisabled() else { return "无法读取系统睡眠状态" }
+        if busy { return tr("正在更改合盖模式…", "Changing lid-closed mode…") }
+        guard let enabled = Self.systemSleepDisabled() else { return tr("无法读取系统睡眠状态", "Couldn't read the system sleep state") }
         if enabled, let deadline {
-            return "合盖继续工作：已开启（剩余 \(max(0, Int(ceil(deadline.timeIntervalSinceNow / 60)))) 分钟）"
+            let minutes = max(0, Int(ceil(deadline.timeIntervalSinceNow / 60)))
+            return tr("合盖继续工作：已开启（剩余 \(minutes) 分钟）", "Keep working with lid closed: on (\(minutes) min left)")
         }
-        return enabled ? "系统已禁用睡眠（外部设置）" : "合盖继续工作：关闭"
+        return enabled ? tr("系统已禁用睡眠（外部设置）", "Sleep disabled by another setting")
+            : tr("合盖继续工作：关闭", "Keep working with lid closed: off")
     }
     init() {
         thermalObserver = NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -75,18 +81,22 @@ final class SleepKeeper {
                     self.marker = nil
                     self.deadline = nil
                     self.expectedOn = false
-                    self.message = self.overheatTriggered ? "过热保护已触发；请冷却后手动开启" : "已恢复正常睡眠"
+                    self.message = self.overheatTriggered ? Self.cooledDownMessage : Self.restoredMessage
                 }
             }
             self.onChange?()
         }
     }
+    private static var cooledDownMessage: String { tr("过热保护已触发；请冷却后手动开启", "Overheat protection triggered; turn it on again after the Mac cools down") }
+    private static var restoredMessage: String { tr("已恢复正常睡眠", "Normal sleep restored") }
     static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     static func appleScriptSource(command: String) -> String {
         let escaped = command.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n")
-        return "do shell script \"\(escaped)\" with administrator privileges with prompt \"Codex 额度工具需要临时调整睡眠设置，让合盖后的任务继续运行。\""
+        let prompt = tr("Codex 额度工具需要临时调整睡眠设置，让合盖后的任务继续运行。",
+                        "Codex Usage needs to change sleep settings temporarily so tasks keep running with the lid closed.")
+        return "do shell script \"\(escaped)\" with administrator privileges with prompt \"\(prompt)\""
     }
     static func watchdogScript(pid: Int32, marker: String, seconds: Int = 7200) -> String {
         """
@@ -130,9 +140,9 @@ final class SleepKeeper {
     }
     func alert(_ text: String) {
         let alert = NSAlert()
-        alert.messageText = "合盖继续工作"
+        alert.messageText = tr("合盖继续工作", "Keep Working with Lid Closed")
         alert.informativeText = text
-        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: tr("好", "OK"))
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
@@ -142,8 +152,8 @@ final class SleepKeeper {
         let result = NSAppleScript(source: Self.appleScriptSource(command: command))?.executeAndReturnError(&error)
         if let error {
             let code = error[NSAppleScript.errorNumber] as? Int
-            message = code == -128 ? "已取消，睡眠设置未更改" : "系统未能更改睡眠设置"
-            if code != -128 { alert(error[NSAppleScript.errorMessage] as? String ?? "授权失败，请重试。") }
+            message = code == -128 ? tr("已取消，睡眠设置未更改", "Cancelled; sleep settings unchanged") : tr("系统未能更改睡眠设置", "macOS couldn't change sleep settings")
+            if code != -128 { alert(error[NSAppleScript.errorMessage] as? String ?? tr("授权失败，请重试。", "Authorization failed. Try again.")) }
             return false
         }
         return result != nil
@@ -151,11 +161,12 @@ final class SleepKeeper {
     func start() {
         guard !busy else { return }
         guard Self.systemSleepDisabled() == false else {
-            alert("系统睡眠已被其他设置关闭，或状态无法读取。请先恢复正常睡眠，再开启本工具的限时模式。")
+            alert(tr("系统睡眠已被其他设置关闭，或状态无法读取。请先恢复正常睡眠，再开启本工具的限时模式。",
+                     "Sleep is already disabled by another setting, or its state can't be read. Restore normal sleep first, then turn on the timed mode."))
             return
         }
         guard !Self.shouldSleep(for: ProcessInfo.processInfo.thermalState) else {
-            alert("当前系统热状态过高，请冷却后再开启合盖继续工作。")
+            alert(tr("当前系统热状态过高，请冷却后再开启合盖继续工作。", "Your Mac is too hot. Let it cool down before turning this on."))
             return
         }
         busy = true
@@ -164,7 +175,7 @@ final class SleepKeeper {
         onChange?()
         let marker = FileManager.default.temporaryDirectory.appendingPathComponent("codexusage-awake-\(UUID().uuidString)")
         do { try Data("normal".utf8).write(to: marker, options: .atomic) }
-        catch { busy = false; alert("无法创建本次运行记录：\(error.localizedDescription)"); onChange?(); return }
+        catch { busy = false; alert(tr("无法创建本次运行记录：", "Couldn't create the session record: ") + error.localizedDescription); onChange?(); return }
         self.marker = marker
         let script = Self.watchdogScript(pid: ProcessInfo.processInfo.processIdentifier, marker: marker.path)
         let command = "/usr/bin/nohup /bin/sh -c \(Self.quote(script)) </dev/null >/dev/null 2>&1 &"
@@ -179,7 +190,8 @@ final class SleepKeeper {
                 guard let self else { return }
                 self.busy = false
                 if !self.active {
-                    self.message = self.overheatTriggered ? "过热保护已触发；请冷却后手动开启" : "未能开启，或电脑电池已低于保护阈值"
+                    self.message = self.overheatTriggered ? Self.cooledDownMessage
+                        : tr("未能开启，或电脑电池已低于保护阈值", "Couldn't turn on, or the battery is below the safety threshold")
                     try? FileManager.default.removeItem(at: marker)
                     self.marker = nil
                     self.deadline = nil
@@ -200,7 +212,7 @@ final class SleepKeeper {
         onChange?()
         if let marker {
             do { try FileManager.default.removeItem(at: marker) }
-            catch { busy = false; alert("无法停止本次运行：\(error.localizedDescription)"); onChange?(); return }
+            catch { busy = false; alert(tr("无法停止本次运行：", "Couldn't stop this session: ") + error.localizedDescription); onChange?(); return }
         } else {
             _ = runAuthorized("/usr/bin/pmset -a disablesleep 0")
         }
@@ -210,8 +222,8 @@ final class SleepKeeper {
             if self.active {
                 // The lease is already removed; expose administrator recovery if restoration failed.
                 self.marker = nil
-                self.message = "系统尚未恢复，请点击恢复正常睡眠"
-            } else { self.message = "已恢复正常睡眠"; self.marker = nil }
+                self.message = tr("系统尚未恢复，请点击恢复正常睡眠", "Sleep isn't restored yet. Turn the switch off again to restore it.")
+            } else { self.message = Self.restoredMessage; self.marker = nil }
             self.deadline = nil
             self.expectedOn = false
             self.onChange?()
