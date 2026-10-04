@@ -32,5 +32,4 @@ precondition(limits.codex?.windows.map(\.remaining) == [11, 100])
 precondition(limits.codex?.windows.map(\.label) == ["5-hour limit", "Weekly limit"])
 Language.current = .chinese
 precondition(limits.codex?.windows.map(\.label) == ["5 小时额度", "每周额度"])
-precondition(limits.reserve?.remaining == 0)
 print("PASS limits decoding, clamping and labels in both languages")

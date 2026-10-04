@@ -139,18 +139,17 @@ enum Snapshots {
                                      probability24h: 18, probability48h: 34, latestResetAt: now.addingTimeInterval(-5 * 86400),
                                      originalPostURL: "https://x.com/thsottiaux/status/1", forecastAt: now.addingTimeInterval(-1200),
                                      fetchedAt: now.addingTimeInterval(-60), sourceDegraded: false)
-        func limits(_ weekly: Double, _ short: Double, reserve: Double?) throws -> Limits {
-            var buckets: [String: Any] = ["codex": ["primary": ["usedPercent": short, "windowDurationMins": 300, "resetsAt": now.addingTimeInterval(2 * 3600 + 1500).timeIntervalSince1970],
+        func limits(_ weekly: Double, _ short: Double) throws -> Limits {
+            let buckets: [String: Any] = ["codex": ["primary": ["usedPercent": short, "windowDurationMins": 300, "resetsAt": now.addingTimeInterval(2 * 3600 + 1500).timeIntervalSince1970],
                                                     "secondary": ["usedPercent": weekly, "windowDurationMins": 10080, "resetsAt": now.addingTimeInterval(3 * 86400 + 4 * 3600).timeIntervalSince1970]]]
-            if let reserve { buckets["base_model_inference"] = ["primary": ["usedPercent": reserve, "windowDurationMins": 10080]] }
             return try JSONDecoder().decode(Limits.self, from: JSONSerialization.data(withJSONObject: ["rateLimitsByLimitId": buckets]))
         }
         let off = SleepDisplay(active: false, busy: false, status: "", message: nil, deadline: nil)
         let on = SleepDisplay(active: true, busy: false, status: "", message: nil, deadline: now.addingTimeInterval(97 * 60))
         let cases: [(String, NSAppearance.Name, UsageModel)] = [
-            ("panel-light", .aqua, UsageModel(preview: try limits(38, 12, reserve: 0), error: nil, updated: now.addingTimeInterval(-120), forecast: ResetForecastSource(snapshot: forecast), sleep: off)),
-            ("panel-dark", .darkAqua, UsageModel(preview: try limits(38, 12, reserve: 0), error: nil, updated: now.addingTimeInterval(-120), forecast: ResetForecastSource(snapshot: forecast), sleep: on)),
-            ("panel-low-error", .aqua, UsageModel(preview: try limits(86, 93, reserve: nil), error: tr("读取超时，请检查网络或 Codex 登录状态", "Timed out. Check your network or Codex sign-in."), updated: now.addingTimeInterval(-1500),
+            ("panel-light", .aqua, UsageModel(preview: try limits(38, 12), error: nil, updated: now.addingTimeInterval(-120), forecast: ResetForecastSource(snapshot: forecast), sleep: off)),
+            ("panel-dark", .darkAqua, UsageModel(preview: try limits(38, 12), error: nil, updated: now.addingTimeInterval(-120), forecast: ResetForecastSource(snapshot: forecast), sleep: on)),
+            ("panel-low-error", .aqua, UsageModel(preview: try limits(86, 93), error: tr("读取超时，请检查网络或 Codex 登录状态", "Timed out. Check your network or Codex sign-in."), updated: now.addingTimeInterval(-1500),
                                                   forecast: ResetForecastSource(snapshot: nil, error: tr("公司网络策略拦截了来源域名", "Your network policy blocks the source site")), sleep: off)),
             ("panel-loading", .aqua, UsageModel(preview: nil, error: nil, updated: nil, forecast: ResetForecastSource(snapshot: nil), sleep: off, fetching: true)),
         ]

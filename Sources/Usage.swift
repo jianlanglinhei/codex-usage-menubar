@@ -24,7 +24,6 @@ struct Limits: Decodable {
     let rateLimits: Bucket?
     let rateLimitsByLimitId: [String: Bucket]?
     var codex: Bucket? { rateLimitsByLimitId?["codex"] ?? rateLimits }
-    var reserve: Window? { rateLimitsByLimitId?["base_model_inference"]?.primary }
 }
 enum FetchError: Error { case message(String) }
 

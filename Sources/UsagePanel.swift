@@ -67,13 +67,10 @@ struct UsagePanel: View {
             let others = model.windows.filter { $0.windowDurationMins != tightest.windowDurationMins }
             VStack(alignment: .leading, spacing: 12) {
                 Hero(window: tightest, now: now, windowCount: model.windows.count)
-                if !others.isEmpty || model.limits?.reserve != nil {
+                if !others.isEmpty {
                     Divider()
                     ForEach(Array(others.enumerated()), id: \.offset) { _, window in
                         WindowRow(window: window, now: now)
-                    }
-                    if let reserve = model.limits?.reserve {
-                        WindowRow(window: reserve, now: now, title: tr("备用模型", "Fallback model"))
                     }
                 }
             }
@@ -222,20 +219,23 @@ private struct ForecastCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkles").foregroundColor(.purple)
-                    Text(tr("额外重置预测", "Bonus reset forecast")).font(.subheadline.weight(.medium))
-                    Text(tr("非官方", "Unofficial")).font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Capsule().fill(Color.primary.opacity(0.08))).foregroundColor(.secondary)
-                    Spacer()
-                    if !expanded, let summary { Text(summary).font(.caption).foregroundColor(.secondary) }
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundColor(.secondary)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles").foregroundColor(.purple)
+                Text(tr("重置预测", "Reset forecast")).font(.subheadline.weight(.medium))
+                Button(action: openLive) {
+                    Image(systemName: "questionmark.circle").foregroundColor(.secondary)
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .help(tr("打开预测来源 codexreset.org", "Open the forecast source, codexreset.org"))
+                Text(tr("非官方", "Unofficial")).font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.primary.opacity(0.08))).foregroundColor(.secondary)
+                Spacer()
+                if !expanded, let summary { Text(summary).font(.caption).foregroundColor(.secondary) }
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundColor(.secondary)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
             }
-            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }
             if expanded { details }
         }
         .card()
