@@ -14,6 +14,19 @@
 - 齿轮菜单可以选择菜单栏显示方式（图标和百分比 / 仅百分比 / 仅图标）、登录时启动、打开数据目录和退出（⌘Q）。
 - 界面语言跟随系统：首选语言是中文时显示简体中文，其他语言显示英文；日期和 12/24 小时制按语言和地区格式化。也可以在“系统设置 › 通用 › 语言与地区 › 应用”里单独给本工具指定语言，重新打开后生效。
 
+## 下载
+
+[下载 v1.0.0 · macOS Apple Silicon（ZIP）](https://github.com/jianlanglinhei/codex-usage-menubar/releases/download/v1.0.0/CodexUsage-1.0.0-macos-arm64.zip) · [全部版本与 SHA-256 校验文件](https://github.com/jianlanglinhei/codex-usage-menubar/releases)
+
+下载后解压，将 `CodexUsage.app` 拖入“应用程序”并打开。需要先安装并登录 Codex CLI；这个安装包不包含 CLI。Intel Mac 暂无预编译安装包，可尝试在本机构建。
+
+GitHub 按 Release 附件记录下载量，可用下列命令查看安装包计数（SHA256SUMS 单独计数，不代表应用下载）：
+
+```bash
+gh api repos/jianlanglinhei/codex-usage-menubar/releases/tags/v1.0.0 \
+  --jq '.assets[] | select(.name | endswith(".zip")) | {name, download_count}'
+```
+
 ## 环境
 
 - macOS 13 或以上，Apple Command Line Tools / Xcode（`xcode-select --install`）。
@@ -36,7 +49,7 @@ ditto build/CodexUsage.app "$HOME/Applications/CodexUsage.app"
 open "$HOME/Applications/CodexUsage.app"
 ```
 
-构建产物使用本机 ad-hoc 签名，没有 Developer ID 公证。默认不设置开机启动，可在面板齿轮菜单里开启“登录时启动”；如果系统要求批准，到“系统设置 › 通用 › 登录项”里允许。如果图标被菜单栏挤到刘海附近，可按住 Command 拖动图标调整位置。
+默认本地构建使用 ad-hoc 签名。正式发布可通过 `CODE_SIGN_IDENTITY` 设置 Developer ID 证书、通过 `NOTARY_PROFILE` 指定本机钥匙串中已有的公证配置，执行 `./scripts/package.sh` 完成签名、公证、装订和 ZIP 打包。凭据不写入仓库。默认不设置开机启动，可在面板齿轮菜单里开启“登录时启动”；如果系统要求批准，到“系统设置 › 通用 › 登录项”里允许。如果图标被菜单栏挤到刘海附近，可按住 Command 拖动图标调整位置。
 
 ## 合盖运行与热保护
 
