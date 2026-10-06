@@ -70,7 +70,7 @@ final class SleepKeeper {
             self.renewLease()
             self.onChange?()
         }
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
             guard let self else { return }
             if let marker = self.marker, self.expectedOn {
                 if self.active {
@@ -86,6 +86,8 @@ final class SleepKeeper {
             }
             self.onChange?()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        pollTimer = timer
     }
     private static var cooledDownMessage: String { tr("过热保护已触发；请冷却后手动开启", "Overheat protection triggered; turn it on again after the Mac cools down") }
     private static var restoredMessage: String { tr("已恢复正常睡眠", "Normal sleep restored") }
@@ -102,17 +104,38 @@ final class SleepKeeper {
         """
         marker=\(quote(marker))
         overheated=0
+        fail() {
+          printf 'CODEX_USAGE_ERROR:%s\\n' "$1"
+          exit 1
+        }
+        check_battery() {
+          battery=$(LC_ALL=C /usr/bin/pmset -g batt) || return 2
+          case "$battery" in
+            *"Battery Power"*)
+              percent=$(printf '%s\\n' "$battery" | /usr/bin/awk -F ';' '/InternalBattery/ { sub(/.*[[:space:]]/, "", $1); gsub(/%/, "", $1); print $1 }')
+              case "$percent" in ''|*[!0-9]*) return 2 ;; esac
+              [ "$percent" -gt 20 ] || return 1
+              ;;
+            *"AC Power"*) ;;
+            *) return 2 ;;
+          esac
+        }
         cleanup() {
           /usr/bin/pmset -a disablesleep 0 || return 1
           if [ "$overheated" = 1 ]; then /usr/bin/pmset sleepnow; fi
         }
+        trap '' HUP
+        trap 'exit 0' INT TERM
+        [ -f "$marker" ] || fail lease
+        /bin/kill -0 \(pid) 2>/dev/null || fail app
+        check_battery || fail "battery:$?"
         trap cleanup EXIT
-        trap 'exit 0' HUP INT TERM
-        [ -f "$marker" ] || exit 1
-        /bin/kill -0 \(pid) 2>/dev/null || exit 1
-        /usr/bin/pmset -a disablesleep 1 || exit 1
+        /usr/bin/pmset -a disablesleep 1 || fail pmset
         started=$(/bin/date +%s)
         end=$(( started + \(seconds) ))
+        # Close the authorization pipe only after reporting a successful start.
+        printf 'CODEX_USAGE_READY\\n'
+        exec >/dev/null 2>&1
         while [ -f "$marker" ] && /bin/kill -0 \(pid) 2>/dev/null; do
           signal=$(/bin/cat "$marker") || break
           case "$signal" in
@@ -126,17 +149,34 @@ final class SleepKeeper {
           if [ $((now - started)) -ge 10 ]; then
             [ $((now - modified)) -lt 45 ] || break
           fi
-          battery=$(/usr/bin/pmset -g batt) || break
-          case "$battery" in
-            *"Battery Power"*)
-              percent=$(echo "$battery" | /usr/bin/awk -F ';' '/InternalBattery/ { sub(/.*[[:space:]]/, "", $1); gsub(/%/, "", $1); print $1 }')
-              case "$percent" in ''|*[!0-9]*) break ;; esac
-              [ "$percent" -gt 20 ] || break
-              ;;
-          esac
+          check_battery || break
           /bin/sleep 2
         done
         """
+    }
+    static func launchCommand(script: String) -> String {
+        // Keep stdout attached for the startup acknowledgement. The watchdog closes it
+        // before its monitoring loop so AppleScript doesn't wait for the full session.
+        // No nohup: under administrator privileges it can't detach from the console and exits
+        // without running the script. An ignored HUP is inherited by the background shell instead.
+        "trap '' HUP; /bin/sh -c \(quote(script)) </dev/null 2>&1 &"
+    }
+    static func startupFailure(_ output: String) -> String? {
+        let lines = output.components(separatedBy: .newlines)
+        if lines.contains("CODEX_USAGE_READY") { return nil }
+        if lines.contains("CODEX_USAGE_ERROR:battery:1") {
+            return tr("电池电量 ≤20%，请接通电源后重试", "Battery is at or below 20%. Connect power and try again.")
+        }
+        if lines.contains("CODEX_USAGE_ERROR:battery:2") {
+            return tr("无法读取电脑电量，为保证低电量保护，未开启", "Couldn't read the battery level; keep-awake wasn't enabled to preserve battery protection.")
+        }
+        if lines.contains("CODEX_USAGE_ERROR:pmset") {
+            return tr("系统拒绝修改睡眠设置，请重试管理员授权", "macOS rejected the sleep setting change. Try administrator authorization again.")
+        }
+        if lines.contains("CODEX_USAGE_ERROR:lease") || lines.contains("CODEX_USAGE_ERROR:app") {
+            return tr("保护进程无法访问本次运行记录，请重启应用后重试", "The safety process couldn't access this session. Restart the app and try again.")
+        }
+        return tr("保护进程未能启动，请重试；详情见 sleep-startup.log", "The safety process couldn't start. Try again; details are in sleep-startup.log.")
     }
     func alert(_ text: String) {
         let alert = NSAlert()
@@ -146,7 +186,7 @@ final class SleepKeeper {
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
-    func runAuthorized(_ command: String) -> Bool {
+    func runAuthorized(_ command: String) -> String? {
         var error: NSDictionary?
         NSApp.activate(ignoringOtherApps: true)
         let result = NSAppleScript(source: Self.appleScriptSource(command: command))?.executeAndReturnError(&error)
@@ -154,9 +194,9 @@ final class SleepKeeper {
             let code = error[NSAppleScript.errorNumber] as? Int
             message = code == -128 ? tr("已取消，睡眠设置未更改", "Cancelled; sleep settings unchanged") : tr("系统未能更改睡眠设置", "macOS couldn't change sleep settings")
             if code != -128 { alert(error[NSAppleScript.errorMessage] as? String ?? tr("授权失败，请重试。", "Authorization failed. Try again.")) }
-            return false
+            return nil
         }
-        return result != nil
+        return result?.stringValue
     }
     func start() {
         guard !busy else { return }
@@ -178,11 +218,16 @@ final class SleepKeeper {
         catch { busy = false; alert(tr("无法创建本次运行记录：", "Couldn't create the session record: ") + error.localizedDescription); onChange?(); return }
         self.marker = marker
         let script = Self.watchdogScript(pid: ProcessInfo.processInfo.processIdentifier, marker: marker.path)
-        let command = "/usr/bin/nohup /bin/sh -c \(Self.quote(script)) </dev/null >/dev/null 2>&1 &"
-        let accepted = runAuthorized(command)
+        let output = runAuthorized(Self.launchCommand(script: script))
+        if let output {
+            let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("CodexUsage")
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? "\(Date())\n\(output)\n".write(to: directory.appendingPathComponent("sleep-startup.log"), atomically: true, encoding: .utf8)
+            message = Self.startupFailure(output)
+        }
         // Authorization may take longer than the watchdog lease. Renew before it starts checking.
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: marker.path)
-        if accepted {
+        if output != nil, message == nil {
             deadline = Date().addingTimeInterval(7200)
             expectedOn = true
             renewLease()
@@ -191,7 +236,7 @@ final class SleepKeeper {
                 self.busy = false
                 if !self.active {
                     self.message = self.overheatTriggered ? Self.cooledDownMessage
-                        : tr("未能开启，或电脑电池已低于保护阈值", "Couldn't turn on, or the battery is below the safety threshold")
+                        : tr("保护进程启动后已退出，睡眠保持开启；请重试", "The safety process exited after starting. Normal sleep remains enabled; try again.")
                     try? FileManager.default.removeItem(at: marker)
                     self.marker = nil
                     self.deadline = nil

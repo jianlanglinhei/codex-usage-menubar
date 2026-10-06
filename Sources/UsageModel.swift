@@ -32,6 +32,7 @@ final class UsageModel: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var fetching = false
     @Published private(set) var lastUpdate: Date?
+    @Published private(set) var creditActivity = CreditActivity()
     @Published var barStyle = BarStyle(rawValue: UserDefaults.standard.string(forKey: "barStyle") ?? "") ?? .iconAndPercent {
         didSet { UserDefaults.standard.set(barStyle.rawValue, forKey: "barStyle") }
     }
@@ -55,13 +56,14 @@ final class UsageModel: ObservableObject {
     }
 
     /// Fixture state for offscreen snapshots; never reaches Codex, the network or pmset.
-    init(preview limits: Limits?, error: String?, updated: Date?, forecast: ResetForecastSource, sleep: SleepDisplay, fetching: Bool = false) {
+    init(preview limits: Limits?, error: String?, updated: Date?, forecast: ResetForecastSource, sleep: SleepDisplay, fetching: Bool = false, creditActivity: CreditActivity = CreditActivity()) {
         live = false
         self.limits = limits
         self.error = error
         self.lastUpdate = updated
         self.forecast = forecast
         self.fetching = fetching
+        self.creditActivity = creditActivity
         sleepKeeper = nil
         sleepPreview = sleep
     }
@@ -92,6 +94,7 @@ final class UsageModel: ObservableObject {
                 self.fetching = false
                 switch result {
                 case .success(let data):
+                    self.creditActivity.record(data, at: Date())
                     self.limits = data
                     self.lastUpdate = Date()
                     self.error = data.codex?.windows.isEmpty == false ? nil : tr("账户未返回 Codex 额度", "Your account returned no Codex limits")
@@ -140,7 +143,7 @@ final class UsageModel: ObservableObject {
     private func writeDiagnostic() {
         guard live else { return }
         let state = sleep
-        let diagnostic = "\(forecast.diagnostic) thermal=\(thermalStatus) sleep=\(state.status) remaining=\(tightest.map { String($0.remaining) } ?? "nil") style=\(barStyle.rawValue) updated=\(String(describing: lastUpdate)) error=\(error ?? "none")\n"
+        let diagnostic = "\(forecast.diagnostic) thermal=\(thermalStatus) sleep=\(state.status) remaining=\(tightest.map { String($0.remaining) } ?? "nil") credits=\(limits?.codex?.credits?.displayBalance ?? "unavailable") style=\(barStyle.rawValue) updated=\(String(describing: lastUpdate)) error=\(error ?? "none")\n"
         try? diagnostic.write(to: Self.dataDirectory.appendingPathComponent("status.txt"), atomically: true, encoding: .utf8)
     }
 }

@@ -4,9 +4,10 @@
 
 ## 功能
 
-- 电池图标显示剩余额度：大于 20% 为绿色，11%–20% 为橙色，10% 及以下为红色；数据过期时图标变淡并带 `!`。
+- 圆环图标显示剩余额度：大于 20% 为绿色，11%–20% 为橙色，10% 及以下为红色；数据过期时图标变淡并带 `!`。
 - 点按菜单栏图标打开面板，右键（或 Control 点按）弹出快捷菜单：打开面板、立即刷新、退出。
 - 面板顶部大字显示最紧的额度，其余额度窗口列在下方，每项带进度条和“N 天 N 小时后重置”倒计时。
+- 额度余额单独显示；同一账户相邻两次成功刷新（间隔不超过 10 分钟）余额下降时，余额行显示“正在消耗额度”，悬停显示减少量。首次读取、余额持平或增加、账户切换、余额缺失和数据过期均不显示；该提示反映最近刷新间的变化，不是实时计费状态。
 - 每 5 分钟读取已登录 Codex CLI 的 `account/rateLimits/read`；打开面板时如果数据超过 2 分钟也会刷新，⌘R 手动刷新。
 - 额度读取失败时保留上次数据，面板顶部显示错误和“重试”按钮，不把未知数据显示为零。
 - “重置预测”卡片每 5 分钟读取 [Codex Reset Monitor](https://codexreset.org/)，显示 24/48 小时概率条、预测基准和上次重置时间，可折叠；标题旁的问号直接打开来源网站，底部带“预测依据”“重置原帖”“刷新预测”。
@@ -16,14 +17,14 @@
 
 ## 下载
 
-[下载 v1.0.0 · macOS Apple Silicon（ZIP）](https://github.com/jianlanglinhei/codex-usage-menubar/releases/download/v1.0.0/CodexUsage-1.0.0-macos-arm64.zip) · [全部版本与 SHA-256 校验文件](https://github.com/jianlanglinhei/codex-usage-menubar/releases)
+[下载 v1.0.3 · macOS Apple Silicon（ZIP）](https://github.com/jianlanglinhei/codex-usage-menubar/releases/download/v1.0.3/CodexUsage-1.0.3-macos-arm64.zip) · [全部版本与 SHA-256 校验文件](https://github.com/jianlanglinhei/codex-usage-menubar/releases)
 
 下载后解压，将 `CodexUsage.app` 拖入“应用程序”并打开。需要先安装并登录 Codex CLI；这个安装包不包含 CLI。Intel Mac 暂无预编译安装包，可尝试在本机构建。
 
 GitHub 按 Release 附件记录下载量，可用下列命令查看安装包计数（SHA256SUMS 单独计数，不代表应用下载）：
 
 ```bash
-gh api repos/jianlanglinhei/codex-usage-menubar/releases/tags/v1.0.0 \
+gh api repos/jianlanglinhei/codex-usage-menubar/releases/tags/v1.0.3 \
   --jq '.assets[] | select(.name | endswith(".zip")) | {name, download_count}'
 ```
 

@@ -15,15 +15,89 @@ struct Window: Decodable {
     }
     var resetDate: Date? { resetsAt.map { Date(timeIntervalSince1970: $0) } }
 }
+struct Credits: Decodable {
+    let unlimited: Bool
+    let balance: Decimal?
+
+    private enum CodingKeys: String, CodingKey { case unlimited, balance }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        unlimited = (try? values.decode(Bool.self, forKey: .unlimited)) ?? false
+        if let text = try? values.decode(String.self, forKey: .balance) {
+            // A malformed optional balance must not hide the account's plan limits.
+            let valid = text.range(of: #"^\d+(\.\d+)?$"#, options: .regularExpression) != nil
+            balance = valid ? Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) : nil
+        } else {
+            let number = try? values.decode(Decimal.self, forKey: .balance)
+            balance = number.flatMap { $0 >= 0 ? $0 : nil }
+        }
+    }
+
+    var displayBalance: String {
+        if unlimited { return tr("不限量", "Unlimited") }
+        guard let balance else { return tr("暂无数据", "Unavailable") }
+        let formatter = NumberFormatter()
+        formatter.locale = Language.current.locale
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        formatter.roundingMode = .down
+        return formatter.string(from: NSDecimalNumber(decimal: balance)) ?? tr("暂无数据", "Unavailable")
+    }
+}
 struct Bucket: Decodable {
     let primary: Window?
     let secondary: Window?
+    let credits: Credits?
     var windows: [Window] { [primary, secondary].compactMap { $0 } }
 }
 struct Limits: Decodable {
+    let accountId: String?
     let rateLimits: Bucket?
     let rateLimitsByLimitId: [String: Bucket]?
     var codex: Bucket? { rateLimitsByLimitId?["codex"] ?? rateLimits }
+}
+
+/// Detect observed balance decreases, not inferred billing from an exhausted plan.
+struct CreditActivity {
+    static let freshness: TimeInterval = 600
+    private var previousBalance: Decimal?
+    private var previousAccount: String?
+    private var previousAt: Date?
+    private(set) var decrease: Decimal?
+    private(set) var observedAt: Date?
+
+    mutating func record(_ limits: Limits, at now: Date) {
+        let credits = limits.codex?.credits
+        let balance = credits?.unlimited == false ? credits?.balance : nil
+        decrease = nil
+        observedAt = nil
+        if let balance, let previousBalance, let previousAt,
+           let account = limits.accountId, account == previousAccount,
+           now.timeIntervalSince(previousAt) > 0,
+           now.timeIntervalSince(previousAt) <= Self.freshness,
+           balance < previousBalance {
+            decrease = previousBalance - balance
+            observedAt = now
+        }
+        previousBalance = balance
+        previousAccount = limits.accountId
+        previousAt = now
+    }
+
+    func isConsuming(at now: Date, stale: Bool) -> Bool {
+        guard !stale, decrease != nil, let observedAt else { return false }
+        return (0...Self.freshness).contains(now.timeIntervalSince(observedAt))
+    }
+
+    var detail: String {
+        guard let decrease else { return "" }
+        let formatter = NumberFormatter()
+        formatter.locale = Language.current.locale
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 2
+        let amount = decrease < Decimal(string: "0.01")! ? "<0.01" : (formatter.string(from: NSDecimalNumber(decimal: decrease)) ?? "—")
+        return tr("距上次刷新减少 \(amount)；根据余额变化判断，非实时计费状态", "Down \(amount) since the last refresh; based on balance changes, not live billing status")
+    }
 }
 enum FetchError: Error { case message(String) }
 

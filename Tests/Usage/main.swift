@@ -33,3 +33,56 @@ precondition(limits.codex?.windows.map(\.label) == ["5-hour limit", "Weekly limi
 Language.current = .chinese
 precondition(limits.codex?.windows.map(\.label) == ["5 小时额度", "每周额度"])
 print("PASS limits decoding, clamping and labels in both languages")
+
+func credits(_ json: String) throws -> Credits {
+    try JSONDecoder().decode(Credits.self, from: Data(json.utf8))
+}
+let paid = try credits(#"{"hasCredits":true,"unlimited":false,"balance":"57806.9421142500"}"#)
+precondition(paid.balance == Decimal(string: "57806.9421142500"))
+precondition(paid.displayBalance == "57,806")
+let zero = try credits(#"{"hasCredits":false,"unlimited":false,"balance":"0"}"#)
+precondition(zero.displayBalance == "0")
+for value in ["null", #""invalid""#, #""12junk""#, #""-1""#, "-1"] {
+    let unavailable = try credits("{\"balance\":\(value)}")
+    precondition(unavailable.balance == nil && unavailable.displayBalance == "暂无数据")
+}
+let unlimited = try credits(#"{"unlimited":true,"balance":null}"#)
+precondition(unlimited.displayBalance == "不限量")
+Language.current = .english
+precondition(paid.displayBalance == "57,806" && unlimited.displayBalance == "Unlimited")
+let legacy = try JSONDecoder().decode(Limits.self, from: Data(#"{"rateLimits":{"primary":{"usedPercent":100},"credits":{"balance":"57806","unlimited":false}}}"#.utf8))
+precondition(legacy.codex?.windows.first?.remaining == 0)
+precondition(legacy.codex?.credits?.displayBalance == "57,806")
+precondition(limits.codex?.credits == nil)
+let perBucket = try JSONDecoder().decode(Limits.self, from: Data(#"{"rateLimitsByLimitId":{"codex":{"credits":{"balance":"1234.5"}},"base_model_inference":{"credits":{"balance":"9999"}}}}"#.utf8))
+precondition(perBucket.codex?.credits?.displayBalance == "1,234")
+print("PASS credit balance: precision, zero, unavailable, unlimited, legacy and per-limit responses")
+
+func sample(_ balance: String, account: String = "test-account", unlimited: Bool = false) throws -> Limits {
+    let json = """
+    {"accountId":"\(account)","rateLimits":{"primary":{"usedPercent":100},"credits":{"balance":\(balance),"unlimited":\(unlimited)}}}
+    """
+    return try JSONDecoder().decode(Limits.self, from: Data(json.utf8))
+}
+var activity = CreditActivity()
+activity.record(try sample("100.75"), at: now)
+precondition(!activity.isConsuming(at: now, stale: false)) // Exhaustion alone isn't spending.
+activity.record(try sample("100.25"), at: now.addingTimeInterval(300))
+precondition(activity.decrease == Decimal(string: "0.5"))
+precondition(activity.isConsuming(at: now.addingTimeInterval(301), stale: false))
+precondition(!activity.isConsuming(at: now.addingTimeInterval(301), stale: true))
+precondition(!activity.isConsuming(at: now.addingTimeInterval(901), stale: false))
+activity.record(try sample("100.25"), at: now.addingTimeInterval(400))
+precondition(!activity.isConsuming(at: now.addingTimeInterval(400), stale: false))
+activity.record(try sample("200"), at: now.addingTimeInterval(500))
+precondition(activity.decrease == nil) // Top-ups/reset don't count as consumption.
+activity.record(try sample("50", account: "other-account"), at: now.addingTimeInterval(600))
+precondition(activity.decrease == nil)
+activity.record(try sample("49", account: "other-account"), at: now.addingTimeInterval(1300))
+precondition(activity.decrease == nil) // A long sleep leaves no recent activity evidence.
+activity.record(try sample("null", account: "other-account"), at: now.addingTimeInterval(1400))
+activity.record(try sample("20", account: "other-account"), at: now.addingTimeInterval(1500))
+precondition(activity.decrease == nil)
+activity.record(try sample("10", account: "other-account", unlimited: true), at: now.addingTimeInterval(1600))
+precondition(activity.decrease == nil)
+print("PASS observed credit usage: decline, first read, unchanged, top-up, account switch, stale, missing and unlimited")

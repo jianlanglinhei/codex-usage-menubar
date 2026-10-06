@@ -73,6 +73,30 @@ struct UsagePanel: View {
                         WindowRow(window: window, now: now)
                     }
                 }
+                Divider()
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label(tr("额度余额", "Credit balance"), systemImage: "creditcard")
+                            .foregroundColor(.secondary)
+                        if model.creditActivity.isConsuming(at: now, stale: model.stale) {
+                            Label(tr("正在消耗额度", "Using credits"), systemImage: "arrow.down.right")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                                .help(model.creditActivity.detail)
+                        }
+                    }
+                    Spacer()
+                    Text(model.limits?.codex?.credits?.displayBalance ?? tr("暂无数据", "Unavailable"))
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                    if model.stale {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundColor(.orange)
+                            .help(tr("上次读取的余额，等待刷新", "Last known balance; waiting for refresh"))
+                    }
+                }
+                .font(.subheadline)
+                .help(tr("套餐额度用完后可继续使用的额度余额", "Credits available for use after reaching your plan limits"))
             }
             .card()
         } else {

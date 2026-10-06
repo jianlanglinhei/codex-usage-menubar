@@ -2,25 +2,30 @@ import AppKit
 import Combine
 import SwiftUI
 
-func batteryImage(remaining: Int?, stale: Bool) -> NSImage {
-    let image = NSImage(size: NSSize(width: 27, height: 14), flipped: false) { _ in
-        let frame = NSColor.gray.withAlphaComponent(stale ? 0.55 : 1)
-        let outline = NSBezierPath(roundedRect: NSRect(x: 0.75, y: 1.25, width: 23, height: 11.5), xRadius: 3, yRadius: 3)
-        frame.setStroke()
-        outline.lineWidth = 1.5
-        outline.stroke()
-        frame.setFill()
-        NSBezierPath(roundedRect: NSRect(x: 25, y: 5, width: 2, height: 4), xRadius: 1, yRadius: 1).fill()
+/// A ring gauge rather than a bar, so it can't be mistaken for the system battery next to it.
+func quotaImage(remaining: Int?, stale: Bool) -> NSImage {
+    let side: CGFloat = 15, line: CGFloat = 2.5
+    let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+        let center = NSPoint(x: side / 2, y: side / 2), radius = (side - line) / 2
+        let track = NSBezierPath()
+        track.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
+        track.lineWidth = line
+        NSColor.gray.withAlphaComponent(stale ? 0.25 : 0.4).setStroke()
+        track.stroke()
         if let remaining, remaining > 0 {
-            let width = max(1, 19 * CGFloat(remaining) / 100)
             let fill: NSColor
             switch QuotaLevel(remaining: remaining) {
             case .healthy: fill = .systemGreen
             case .low: fill = .systemOrange
             case .critical: fill = .systemRed
             }
-            fill.withAlphaComponent(stale ? 0.5 : 1).setFill()
-            NSBezierPath(roundedRect: NSRect(x: 2.75, y: 3.25, width: width, height: 7.5), xRadius: min(1.5, width / 2), yRadius: 1.5).fill()
+            // Clockwise from 12 o'clock, like a countdown.
+            let arc = NSBezierPath()
+            arc.appendArc(withCenter: center, radius: radius, startAngle: 90, endAngle: 90 - 360 * CGFloat(min(remaining, 100)) / 100, clockwise: true)
+            arc.lineWidth = line
+            arc.lineCapStyle = .round
+            fill.withAlphaComponent(stale ? 0.5 : 1).setStroke()
+            arc.stroke()
         }
         return true
     }
@@ -68,13 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let percent = remaining.map { "\($0)%" } ?? "—"
         switch model.barStyle {
         case .iconAndPercent:
-            button.image = batteryImage(remaining: remaining, stale: stale)
+            button.image = quotaImage(remaining: remaining, stale: stale)
             button.title = " " + percent + (stale ? " !" : "")
         case .percent:
             button.image = nil
             button.title = percent + (stale ? " !" : "")
         case .icon:
-            button.image = batteryImage(remaining: remaining, stale: stale)
+            button.image = quotaImage(remaining: remaining, stale: stale)
             button.title = stale ? " !" : ""
         }
         var tip = tr("Codex 剩余额度 ", "Codex usage remaining: ") + percent
@@ -139,14 +144,20 @@ enum Snapshots {
                                      probability24h: 18, probability48h: 34, latestResetAt: now.addingTimeInterval(-5 * 86400),
                                      originalPostURL: "https://x.com/thsottiaux/status/1", forecastAt: now.addingTimeInterval(-1200),
                                      fetchedAt: now.addingTimeInterval(-60), sourceDegraded: false)
-        func limits(_ weekly: Double, _ short: Double) throws -> Limits {
+        func limits(_ weekly: Double, _ short: Double, balance: String = "57806.1421142500") throws -> Limits {
             let buckets: [String: Any] = ["codex": ["primary": ["usedPercent": short, "windowDurationMins": 300, "resetsAt": now.addingTimeInterval(2 * 3600 + 1500).timeIntervalSince1970],
-                                                    "secondary": ["usedPercent": weekly, "windowDurationMins": 10080, "resetsAt": now.addingTimeInterval(3 * 86400 + 4 * 3600).timeIntervalSince1970]]]
-            return try JSONDecoder().decode(Limits.self, from: JSONSerialization.data(withJSONObject: ["rateLimitsByLimitId": buckets]))
+                                                    "secondary": ["usedPercent": weekly, "windowDurationMins": 10080, "resetsAt": now.addingTimeInterval(3 * 86400 + 4 * 3600).timeIntervalSince1970],
+                                                    "credits": ["unlimited": false, "balance": balance]]]
+            return try JSONDecoder().decode(Limits.self, from: JSONSerialization.data(withJSONObject: ["accountId": "preview-account", "rateLimitsByLimitId": buckets]))
         }
         let off = SleepDisplay(active: false, busy: false, status: "", message: nil, deadline: nil)
         let on = SleepDisplay(active: true, busy: false, status: "", message: nil, deadline: now.addingTimeInterval(97 * 60))
+        var activity = CreditActivity()
+        activity.record(try limits(100, 100, balance: "57818.6421142500"), at: now.addingTimeInterval(-300))
+        activity.record(try limits(100, 100), at: now.addingTimeInterval(-60))
         let cases: [(String, NSAppearance.Name, UsageModel)] = [
+            ("panel-credits", .aqua, UsageModel(preview: try limits(100, 100), error: nil, updated: now.addingTimeInterval(-60), forecast: ResetForecastSource(snapshot: forecast), sleep: off, creditActivity: activity)),
+            ("panel-credits-dark", .darkAqua, UsageModel(preview: try limits(100, 100), error: nil, updated: now.addingTimeInterval(-60), forecast: ResetForecastSource(snapshot: forecast), sleep: off, creditActivity: activity)),
             ("panel-light", .aqua, UsageModel(preview: try limits(38, 12), error: nil, updated: now.addingTimeInterval(-120), forecast: ResetForecastSource(snapshot: forecast), sleep: off)),
             ("panel-dark", .darkAqua, UsageModel(preview: try limits(38, 12), error: nil, updated: now.addingTimeInterval(-120), forecast: ResetForecastSource(snapshot: forecast), sleep: on)),
             ("panel-low-error", .aqua, UsageModel(preview: try limits(86, 93), error: tr("读取超时，请检查网络或 Codex 登录状态", "Timed out. Check your network or Codex sign-in."), updated: now.addingTimeInterval(-1500),
@@ -156,7 +167,7 @@ enum Snapshots {
         let icons = HStack(spacing: 18) {
             ForEach([(76, false), (16, false), (7, false), (62, true)], id: \.0) { remaining, stale in
                 HStack(spacing: 3) {
-                    Image(nsImage: batteryImage(remaining: remaining, stale: stale))
+                    Image(nsImage: quotaImage(remaining: remaining, stale: stale))
                     Text("\(remaining)%\(stale ? " !" : "")").font(.system(size: 12, weight: .medium).monospacedDigit())
                 }
             }
@@ -192,6 +203,7 @@ if CommandLine.arguments.contains("--check") {
         let data = try fetchLimits()
         guard let windows = data.codex?.windows, !windows.isEmpty else { throw FetchError.message("No quota windows") }
         for window in windows { print("\(window.label): remaining=\(window.remaining)%") }
+        print("\(tr("额度余额", "Credit balance")): \(data.codex?.credits?.displayBalance ?? tr("暂无数据", "Unavailable"))")
     } catch { fputs("\(error)\n", stderr); exit(1) }
 } else if let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
     if let flag = CommandLine.arguments.firstIndex(of: "--lang"), flag + 1 < CommandLine.arguments.count {
