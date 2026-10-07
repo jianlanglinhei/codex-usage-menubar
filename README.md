@@ -89,3 +89,7 @@ build/CodexUsage.app/Contents/MacOS/CodexUsage --snapshot /tmp/codex-usage-shots
 运行时在 `~/Library/Application Support/CodexUsage/` 写入预测缓存 `reset-forecast.json` 和诊断状态 `status.txt`。凭据由 Codex CLI 管理，本工具不复制或上传它们。
 
 本仓库只包含源码、构建资源和合成测试输入，不包含本机额度数据、个人缓存、登录凭据、编译产物或第三方整站快照。应用不会向 GitHub 上传文件；第三方预测请求只读取公开页面。
+
+## Support
+
+Codex Usage is free and open source. If it saves you time, you can [buy me a coffee on Afdian](https://afdian.com/a/edgewave).
