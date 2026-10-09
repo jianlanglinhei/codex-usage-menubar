@@ -12,6 +12,8 @@ extension QuotaLevel {
 
 struct UsagePanel: View {
     @ObservedObject var model: UsageModel
+    var updater: AppUpdater? = nil
+    var checkForUpdates: () -> Void = {}
     var quit: () -> Void = { NSApp.terminate(nil) }
 
     var body: some View {
@@ -19,11 +21,16 @@ struct UsagePanel: View {
             VStack(alignment: .leading, spacing: 12) {
                 header(now: context.date)
                 if let error = model.error { ErrorBanner(text: error, retry: model.refresh, busy: model.fetching) }
-                quotaSection(now: context.date)
-                ForecastCard(snapshot: model.forecast.snapshot, fetching: model.forecast.fetching, error: model.forecast.error,
-                             hasPost: model.forecast.postURL != nil, now: context.date,
-                             openLive: model.forecast.openLive, openPost: model.forecast.openPost, refresh: model.forecast.refresh)
-                SleepCard(state: model.sleep, thermal: model.thermalState, now: context.date, toggle: model.toggleSleep)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        quotaSection(now: context.date)
+                        ForecastCard(snapshot: model.forecast.snapshot, fetching: model.forecast.fetching, error: model.forecast.error,
+                                     hasPost: model.forecast.postURL != nil, now: context.date,
+                                     openLive: model.forecast.openLive, openPost: model.forecast.openPost, refresh: model.forecast.refresh)
+                        SleepCard(state: model.sleep, thermal: model.thermalState, now: context.date, toggle: model.toggleSleep)
+                    }
+                }
+                .frame(maxHeight: max(240, (NSScreen.main?.visibleFrame.height ?? 800) - 180))
                 footer
             }
             .padding(14)
@@ -34,7 +41,7 @@ struct UsagePanel: View {
     private func header(now: Date) -> some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(tr("Codex 额度", "Codex Usage")).font(.headline)
+                Text("Codex Cub").font(.headline)
                 Text(updateText(now: now))
                     .font(.caption)
                     .foregroundColor(model.stale && !model.fetching ? .orange : .secondary)
@@ -115,6 +122,9 @@ struct UsagePanel: View {
             if let note = model.launchAtLoginNote {
                 Text(note).font(.caption2).foregroundColor(.orange)
             }
+            if let note = model.quotaAlertsNote {
+                Text(note).font(.caption2).foregroundColor(.orange)
+            }
             footerBar
         }
     }
@@ -127,11 +137,16 @@ struct UsagePanel: View {
                 Picker(tr("菜单栏显示", "Menu bar shows"), selection: $model.barStyle) {
                     ForEach(BarStyle.allCases) { Text($0.title).tag($0) }
                 }
+                Toggle(tr("额度不足提醒（20% / 10%）", "Low quota alerts (20% / 10%)"), isOn: Binding(get: { model.quotaAlertsEnabled }, set: model.setQuotaAlertsEnabled))
                 Toggle(tr("登录时启动", "Open at login"), isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
                 Divider()
                 Button(tr("打开数据目录", "Open data folder"), action: model.openDataDirectory)
                 Divider()
-                Button(tr("退出 Codex 额度", "Quit Codex Usage"), action: quit).keyboardShortcut("q")
+                if let updater {
+                    UpdateMenuItems(updater: updater, check: checkForUpdates)
+                    Divider()
+                }
+                Button(tr("退出 Codex Cub", "Quit Codex Cub"), action: quit).keyboardShortcut("q")
             } label: {
                 Image(systemName: "gearshape")
             }
@@ -151,19 +166,22 @@ private struct Hero: View {
     var body: some View {
         let level = QuotaLevel(remaining: window.remaining)
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text("\(window.remaining)")
-                    .font(.system(size: 40, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundColor(level.color)
-                Text("%").font(.title3.weight(.semibold)).foregroundColor(level.color)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
+            HStack(alignment: .center, spacing: 16) {
+                QuotaCup(remaining: window.remaining)
+                    .frame(width: 108, height: 146)
+                VStack(alignment: .leading, spacing: 6) {
                     Text(windowCount > 1 ? tr("最紧的额度", "Tightest limit") : tr("剩余额度", "Remaining")).font(.caption).foregroundColor(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text("\(window.remaining)")
+                            .font(.system(size: 40, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundColor(level.color)
+                        Text("%").font(.title3.weight(.semibold)).foregroundColor(level.color)
+                    }
                     Text(window.label).font(.subheadline.weight(.medium))
                 }
+                Spacer(minLength: 0)
             }
-            QuotaBar(fraction: Double(window.remaining) / 100, color: level.color, height: 8)
             if let reset = window.resetDate {
                 Label(resetText(reset, now: now) + " · " + shortDateTime(reset), systemImage: "clock")
                     .font(.caption)

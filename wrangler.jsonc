@@ -1,0 +1,12 @@
+{
+  "name": "codex-usage",
+  "pages_build_output_dir": "docs",
+  "compatibility_date": "2026-10-04",
+  "d1_databases": [
+    {
+      "binding": "ANALYTICS_DB",
+      "database_name": "codex-usage-events",
+      "database_id": "af7f3793-0df4-4e0b-8fd2-3df06382dea2"
+    }
+  ]
+}

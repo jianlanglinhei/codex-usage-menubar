@@ -97,7 +97,7 @@ final class SleepKeeper {
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n")
         let prompt = tr("Codex 额度工具需要临时调整睡眠设置，让合盖后的任务继续运行。",
-                        "Codex Usage needs to change sleep settings temporarily so tasks keep running with the lid closed.")
+                        "Codex Cub needs to change sleep settings temporarily so tasks keep running with the lid closed.")
         return "do shell script \"\(escaped)\" with administrator privileges with prompt \"\(prompt)\""
     }
     static func watchdogScript(pid: Int32, marker: String, seconds: Int = 7200) -> String {

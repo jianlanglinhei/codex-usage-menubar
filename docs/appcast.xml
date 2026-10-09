@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Codex Cub Updates</title>
+    <item>
+      <title>Codex Cub 1.0.7</title>
+      <sparkle:version>8</sparkle:version>
+      <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description>新增额度不足系统提醒和设置开关，官网迁移至 Codex Cub。 / Adds low-quota notifications and settings; moves the website to Codex Cub.</description>
+      <enclosure url="https://codex-cub.edgewavelabs.ai/downloads/CodexUsage-1.0.7-macos-arm64.zip" length="2503511" type="application/octet-stream" sparkle:edSignature="7BKlH7qBDP4S67K9/u4t2cSr84wfq8mXiL4GkB0CM1hUh482z/5iJwnWygmPH6VnGgV/wWxSzJoUAMAgj5gCDg=="></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: /PRUVOtI4fnCZdYaqaYhKiQCvRlrdgrNDhUA+QXDz2m3IGWnjVMEx+kWH/DWvsli29FgIGzUOW0LJ2/tex31BA==
+length: 1151
+-->

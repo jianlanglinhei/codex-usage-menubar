@@ -13,3 +13,11 @@ xcrun swiftc "$PROJECT_ROOT/Tests/Forecast/main.swift" "$PROJECT_ROOT/Sources/Re
 "$TEST_OUTPUT/forecast-check" "$PROJECT_ROOT/Tests/Fixtures/forecast.html"
 xcrun swiftc "$PROJECT_ROOT/Tests/Usage/main.swift" "$PROJECT_ROOT/Sources/Usage.swift" "$L10N" -o "$TEST_OUTPUT/usage-check"
 "$TEST_OUTPUT/usage-check"
+
+xcrun swiftc -parse-as-library "$PROJECT_ROOT/Tests/QuotaCup/Rendering.swift" "$PROJECT_ROOT/Sources/QuotaCup.swift" "$PROJECT_ROOT/Sources/QuotaStatusIcon.swift" "$PROJECT_ROOT/Sources/Usage.swift" "$L10N" \
+  -o "$TEST_OUTPUT/cup-check" -framework AppKit -framework SwiftUI
+"$TEST_OUTPUT/cup-check" "$TEST_OUTPUT/cup-preview.png"
+
+xcrun swiftc "$PROJECT_ROOT/Tests/QuotaAlerts/main.swift" "$PROJECT_ROOT/Sources/QuotaAlertState.swift" "$PROJECT_ROOT/Sources/Usage.swift" "$L10N" \
+  -o "$TEST_OUTPUT/quota-alert-check" -framework CryptoKit
+"$TEST_OUTPUT/quota-alert-check"

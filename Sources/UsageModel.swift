@@ -41,6 +41,11 @@ final class UsageModel: ObservableObject {
     /// Lets the panel close itself before a system prompt takes focus.
     var dismissPanel: (() -> Void)?
 
+    @Published private(set) var quotaAlertsEnabled = UserDefaults.standard.object(forKey: "quotaAlertsEnabled") as? Bool ?? true
+    @Published private(set) var quotaAlertsNote: String?
+    private var quotaNotifications: QuotaNotifications?
+    var openPanel: (() -> Void)?
+
     let forecast: ResetForecastSource
     private let sleepKeeper: SleepKeeper?
     private var sleepPreview: SleepDisplay?
@@ -48,8 +53,12 @@ final class UsageModel: ObservableObject {
 
     init() {
         live = true
+        let notifications = QuotaNotifications()
+        quotaNotifications = notifications
         forecast = ResetForecastSource()
         sleepKeeper = SleepKeeper()
+        notifications.onNote = { [weak self] note in self?.quotaAlertsNote = note }
+        notifications.onOpen = { [weak self] in self?.openPanel?() }
         sleepKeeper?.onChange = { [weak self] in self?.changed() }
         forecast.onChange = { [weak self] in self?.changed() }
         try? FileManager.default.createDirectory(at: Self.dataDirectory, withIntermediateDirectories: true)
@@ -94,11 +103,13 @@ final class UsageModel: ObservableObject {
                 self.fetching = false
                 switch result {
                 case .success(let data):
+                    self.quotaNotifications?.record(data, at: Date())
                     self.creditActivity.record(data, at: Date())
                     self.limits = data
                     self.lastUpdate = Date()
                     self.error = data.codex?.windows.isEmpty == false ? nil : tr("账户未返回 Codex 额度", "Your account returned no Codex limits")
                 case .failure(let error):
+                    self.quotaNotifications?.invalidate()
                     if case FetchError.message(let message) = error { self.error = message }
                     else { self.error = tr("读取失败：", "Couldn't read limits: ") + error.localizedDescription }
                 }
@@ -131,6 +142,12 @@ final class UsageModel: ObservableObject {
             launchAtLoginNote = tr("无法更改登录项：", "Couldn't change login item: ") + error.localizedDescription
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    func setQuotaAlertsEnabled(_ on: Bool) {
+        guard live else { return }
+        quotaAlertsEnabled = on
+        quotaNotifications?.setEnabled(on)
     }
 
     func openDataDirectory() { NSWorkspace.shared.open(Self.dataDirectory) }

@@ -5,31 +5,47 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Codex Usage</string>
+	<string>Codex Cub</string>
 	<key>CFBundleExecutable</key>
 	<string>CodexUsage</string>
-	<key>CFBundleIdentifier</key>
-	<string>local.alsc.codex-usage</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.alsc.codex-usage</string>
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>en</string>
 		<string>zh-Hans</string>
 	</array>
 	<key>CFBundleName</key>
-	<string>CodexUsage</string>
+	<string>Codex Cub</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.3</string>
+	<string>1.0.7</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>8</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://codex-cub.edgewavelabs.ai/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUSendProfileInfo</key>
+	<false/>
+	<key>SUPublicEDKey</key>
+	<string>0LcicsQJ1WBRGP/ZPjrmOZAIzRKa/9L709L77IHM72U=</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
 	<true/>
 </dict>
 </plist>

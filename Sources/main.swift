@@ -2,41 +2,10 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// A ring gauge rather than a bar, so it can't be mistaken for the system battery next to it.
-func quotaImage(remaining: Int?, stale: Bool) -> NSImage {
-    let side: CGFloat = 15, line: CGFloat = 2.5
-    let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
-        let center = NSPoint(x: side / 2, y: side / 2), radius = (side - line) / 2
-        let track = NSBezierPath()
-        track.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
-        track.lineWidth = line
-        NSColor.gray.withAlphaComponent(stale ? 0.25 : 0.4).setStroke()
-        track.stroke()
-        if let remaining, remaining > 0 {
-            let fill: NSColor
-            switch QuotaLevel(remaining: remaining) {
-            case .healthy: fill = .systemGreen
-            case .low: fill = .systemOrange
-            case .critical: fill = .systemRed
-            }
-            // Clockwise from 12 o'clock, like a countdown.
-            let arc = NSBezierPath()
-            arc.appendArc(withCenter: center, radius: radius, startAngle: 90, endAngle: 90 - 360 * CGFloat(min(remaining, 100)) / 100, clockwise: true)
-            arc.lineWidth = line
-            arc.lineCapStyle = .round
-            fill.withAlphaComponent(stale ? 0.5 : 1).setStroke()
-            arc.stroke()
-        }
-        return true
-    }
-    image.isTemplate = false
-    image.accessibilityDescription = tr("Codex 剩余额度", "Codex usage remaining")
-    return image
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var item: NSStatusItem!
     private let model = UsageModel()
+    private let updater = AppUpdater()
     private let popover = NSPopover()
     private var timer: Timer?
     private var observation: AnyCancellable?
@@ -52,15 +21,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.action = #selector(clicked)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        let host = NSHostingController(rootView: UsagePanel(model: model, quit: { [weak self] in self?.quit() }))
+        let host = NSHostingController(rootView: UsagePanel(model: model, updater: updater, checkForUpdates: { [weak self] in self?.checkForUpdates() }, quit: { [weak self] in self?.quit() }))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
+        model.openPanel = { [weak self] in self?.openPanel() }
         model.dismissPanel = { [weak self] in self?.popover.performClose(nil) }
         observation = model.objectWillChange.receive(on: RunLoop.main).sink { [weak self] _ in self?.render() }
         render()
+        if CommandLine.arguments.contains("--show-panel") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.openPanel() }
+        }
+        updater.start()
+        if CommandLine.arguments.contains("--check-for-updates") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.checkForUpdates() }
+        }
         model.refresh()
         timer = Timer.scheduledTimer(withTimeInterval: UsageModel.refreshInterval, repeats: true) { [weak self] _ in self?.model.refresh() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refresh), name: NSWorkspace.didWakeNotification, object: nil)
@@ -117,6 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         refresh.isEnabled = !model.fetching
         let quit = NSMenuItem(title: tr("退出", "Quit"), action: #selector(quit), keyEquivalent: "q")
         for row in [open, refresh] { row.target = self; menu.addItem(row) }
+        let updates = NSMenuItem(title: tr("检查更新…", "Check for Updates…"), action: #selector(checkForUpdates), keyEquivalent: "")
+        updates.target = self
+        updates.isEnabled = updater.canCheck
+        menu.addItem(updates)
         menu.addItem(.separator())
         quit.target = self
         menu.addItem(quit)
@@ -127,6 +108,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) { item.button?.highlight(false) }
 
     @objc private func openPanel() { if !popover.isShown { togglePopover() } }
+    @objc private func checkForUpdates() {
+        popover.performClose(nil)
+        updater.check()
+    }
     @objc private func refresh() { model.refresh() }
     func applicationWillTerminate(_ notification: Notification) { model.releaseLease() }
     @objc private func quit() {

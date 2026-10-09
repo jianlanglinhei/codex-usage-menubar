@@ -7,3 +7,9 @@
 .env.*
 status.txt
 reset-forecast.json
+
+__pycache__/
+
+.wrangler/
+node_modules/
+docs/downloads/
